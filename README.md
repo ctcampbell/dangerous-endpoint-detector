@@ -2,6 +2,8 @@
 
 Analyze source code and detect potentially dangerous API endpoints that perform critical security actions like:
 
+** DO NOT USE THIS AGAINST CUSTOMER CODE ON YOUR LOCAL MACHINE. IF USING LOCALLY ONLY SCAN OPEN SOURCE PORJECTS DOWNLOADED FROM THE OPEN SOURCE REPOSITORY. FOR EXAMPLE IF A CUSTOEMR CONFIRMS THEY ARE TESTING A NON-MODIFIED VERSION OF WEBGOAT, DOWNLOAD FROM THE RELEVANT GITHUB REPOSITORY **
+
 1. **User Login** - Endpoints that authenticate users and create sessions
 2. **User Logout** - Endpoints that terminate sessions or log users out
 3. **Password Changes** - Endpoints that modify or delete user passwords

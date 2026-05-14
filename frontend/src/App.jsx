@@ -7,6 +7,8 @@ function App() {
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
   const [copiedEndpoints, setCopiedEndpoints] = useState(false)
+  const [currentFile, setCurrentFile] = useState('')
+  const [progress, setProgress] = useState(0)
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem('darkMode')
     return saved ? JSON.parse(saved) : false
@@ -70,28 +72,63 @@ function App() {
     setLoading(true)
     setError(null)
     setResults(null)
+    setProgress(0)
+    setCurrentFile('')
 
     try {
-      const response = await fetch('http://localhost:8000/analyze-batch', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          files: selectedFiles
-        })
-      })
+      const fileResults = []
+      let totalEndpoints = 0
+      let totalDangerous = 0
 
-      if (!response.ok) {
-        throw new Error('Failed to analyze code')
+      // Process files sequentially to show progress
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const file = selectedFiles[i]
+        setCurrentFile(file.name)
+        setProgress(Math.round(((i) / selectedFiles.length) * 100))
+
+        const response = await fetch('http://localhost:8000/analyze', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            code: file.content,
+            file_path: file.name
+          })
+        })
+
+        if (!response.ok) {
+          throw new Error(`Failed to analyze ${file.name}`)
+        }
+
+        const data = await response.json()
+
+        // Add to results if there are any endpoints
+        fileResults.push({
+          file_path: file.name,
+          results: data.results,
+          total_endpoints_analyzed: data.total_endpoints_analyzed
+        })
+
+        totalEndpoints += data.total_endpoints_analyzed
+        totalDangerous += data.results.length
       }
 
-      const data = await response.json()
-      setResults(data)
+      // Set to 100% when complete
+      setProgress(100)
+
+      // Format results in the same structure as the batch endpoint
+      setResults({
+        files: fileResults,
+        total_files_analyzed: selectedFiles.length,
+        total_endpoints_analyzed: totalEndpoints,
+        total_dangerous_endpoints: totalDangerous
+      })
     } catch (err) {
       setError(err.message || 'An error occurred while analyzing the code')
     } finally {
       setLoading(false)
+      setCurrentFile('')
     }
   }
 
@@ -250,6 +287,30 @@ function App() {
               `🔍 Analyze ${selectedFiles.length > 0 ? selectedFiles.length + ' File' + (selectedFiles.length !== 1 ? 's' : '') : 'Folder'}`
             )}
           </button>
+
+          {loading && (
+            <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium text-blue-900 dark:text-blue-200">
+                  Processing files...
+                </span>
+                <span className="text-sm font-bold text-blue-900 dark:text-blue-200">
+                  {progress}%
+                </span>
+              </div>
+              <div className="w-full bg-blue-200 dark:bg-blue-900 rounded-full h-2.5 mb-2">
+                <div
+                  className="bg-blue-600 dark:bg-blue-500 h-2.5 rounded-full transition-all duration-300"
+                  style={{ width: `${progress}%` }}
+                ></div>
+              </div>
+              {currentFile && (
+                <p className="text-xs text-blue-800 dark:text-blue-300 truncate">
+                  Current file: {currentFile}
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {error && (

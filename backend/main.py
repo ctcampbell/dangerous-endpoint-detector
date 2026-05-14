@@ -6,6 +6,10 @@ import os
 import re
 from typing import List, Dict
 import json
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv(dotenv_path="../.env")
 
 app = FastAPI()
 

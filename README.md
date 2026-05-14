@@ -141,6 +141,15 @@ def update_role(user_id):
 
 4. **Results Display**: The frontend displays findings with color-coded badges and detailed explanations
 
+Example of some findings.
+
+![Example Findings](img/findings_examples.png "Example Findings")
+
+Example of endpoints to add to blocked/auth only list:
+
+![Endpoint List](img/endpoint_list.png "Endpoint List")
+
+
 ## API Endpoints
 
 ### `POST /analyze`

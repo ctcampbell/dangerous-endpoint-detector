@@ -9,6 +9,10 @@ function App() {
   const [copiedEndpoints, setCopiedEndpoints] = useState(false)
   const [currentFile, setCurrentFile] = useState('')
   const [progress, setProgress] = useState(0)
+  const [currentEndpointInfo, setCurrentEndpointInfo] = useState(null)
+  const [totalEndpointsAnalyzed, setTotalEndpointsAnalyzed] = useState(0)
+  const [totalDangerousFound, setTotalDangerousFound] = useState(0)
+  const [currentEndpoint, setCurrentEndpoint] = useState('')
   const [darkMode, setDarkMode] = useState(() => {
     const saved = localStorage.getItem('darkMode')
     return saved ? JSON.parse(saved) : false
@@ -74,6 +78,10 @@ function App() {
     setResults(null)
     setProgress(0)
     setCurrentFile('')
+    setCurrentEndpointInfo(null)
+    setTotalEndpointsAnalyzed(0)
+    setTotalDangerousFound(0)
+    setCurrentEndpoint('')
 
     try {
       const fileResults = []
@@ -85,8 +93,9 @@ function App() {
         const file = selectedFiles[i]
         setCurrentFile(file.name)
         setProgress(Math.round(((i) / selectedFiles.length) * 100))
+        setCurrentEndpoint('')
 
-        const response = await fetch('http://localhost:8000/analyze', {
+        const response = await fetch('http://localhost:8000/analyze-stream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -101,21 +110,87 @@ function App() {
           throw new Error(`Failed to analyze ${file.name}`)
         }
 
-        const data = await response.json()
+        // Process the streaming response
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let fileEndpoints = 0
+        let fileDangerous = 0
+        let dangerousResults = []
+        let buffer = ''
 
-        // Add to results if there are any endpoints
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          // Decode and add to buffer
+          buffer += decoder.decode(value, { stream: true })
+
+          // Process complete lines
+          const lines = buffer.split('\n')
+          // Keep the last (potentially incomplete) line in buffer
+          buffer = lines.pop() || ''
+
+          for (const line of lines) {
+            if (line.trim().startsWith('data: ')) {
+              try {
+                const jsonStr = line.trim().substring(6)
+                const data = JSON.parse(jsonStr)
+
+                switch (data.type) {
+                  case 'status':
+                    setCurrentEndpoint(data.message)
+                    break
+                  case 'endpoints_found':
+                    fileEndpoints = data.count
+                    setCurrentEndpointInfo({
+                      totalEndpoints: data.count,
+                      dangerousEndpoints: 0,
+                      hasDangerous: false
+                    })
+                    break
+                  case 'analyzing':
+                    setCurrentEndpoint(`${data.endpoint} (${data.index}/${data.total})`)
+                    break
+                  case 'dangerous_found':
+                    fileDangerous++
+                    setCurrentEndpointInfo({
+                      totalEndpoints: fileEndpoints,
+                      dangerousEndpoints: fileDangerous,
+                      hasDangerous: true
+                    })
+                    break
+                  case 'safe':
+                    // Update shown but don't increment dangerous count
+                    break
+                  case 'complete':
+                    fileEndpoints = data.total_endpoints
+                    dangerousResults = data.dangerous_endpoints
+                    totalEndpoints += data.total_endpoints
+                    totalDangerous += data.dangerous_endpoints.length
+                    setTotalEndpointsAnalyzed(totalEndpoints)
+                    setTotalDangerousFound(totalDangerous)
+                    break
+                  case 'error':
+                    throw new Error(data.message)
+                }
+              } catch (parseError) {
+                console.error('Error parsing SSE data:', parseError, 'Line:', line)
+              }
+            }
+          }
+        }
+
+        // Add to results
         fileResults.push({
           file_path: file.name,
-          results: data.results,
-          total_endpoints_analyzed: data.total_endpoints_analyzed
+          results: dangerousResults,
+          total_endpoints_analyzed: fileEndpoints
         })
-
-        totalEndpoints += data.total_endpoints_analyzed
-        totalDangerous += data.results.length
       }
 
       // Set to 100% when complete
       setProgress(100)
+      setCurrentEndpoint('')
 
       // Format results in the same structure as the batch endpoint
       setResults({
@@ -129,6 +204,10 @@ function App() {
     } finally {
       setLoading(false)
       setCurrentFile('')
+      setCurrentEndpointInfo(null)
+      setTotalEndpointsAnalyzed(0)
+      setTotalDangerousFound(0)
+      setCurrentEndpoint('')
     }
   }
 
@@ -304,10 +383,60 @@ function App() {
                   style={{ width: `${progress}%` }}
                 ></div>
               </div>
+
+              {/* Overall progress stats */}
+              {totalEndpointsAnalyzed > 0 && (
+                <div className="mb-2 pb-2 border-b border-blue-200 dark:border-blue-800">
+                  <div className="flex items-center gap-3 text-xs font-medium">
+                    <span className="text-blue-800 dark:text-blue-200">
+                      📊 Total: {totalEndpointsAnalyzed} endpoint{totalEndpointsAnalyzed !== 1 ? 's' : ''} analyzed
+                    </span>
+                    {totalDangerousFound > 0 && (
+                      <span className="text-red-600 dark:text-red-400 font-semibold">
+                        ⚠️ {totalDangerousFound} dangerous
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {currentFile && (
-                <p className="text-xs text-blue-800 dark:text-blue-300 truncate">
-                  Current file: {currentFile}
-                </p>
+                <div className="space-y-1">
+                  <p className="text-xs text-blue-800 dark:text-blue-300 truncate">
+                    Current file: {currentFile}
+                  </p>
+                  {currentEndpoint && (
+                    <p className="text-xs text-purple-700 dark:text-purple-300 truncate font-mono animate-pulse bg-purple-50 dark:bg-purple-900/20 px-2 py-1 rounded">
+                      🔄 {currentEndpoint}
+                    </p>
+                  )}
+                  {currentEndpointInfo && (
+                    <div className="flex items-center gap-2 text-xs">
+                      {currentEndpointInfo.totalEndpoints > 0 ? (
+                        <>
+                          <span className="text-blue-700 dark:text-blue-300">
+                            {currentEndpointInfo.totalEndpoints} endpoint{currentEndpointInfo.totalEndpoints !== 1 ? 's' : ''} found
+                          </span>
+                          {currentEndpointInfo.hasDangerous ? (
+                            <span className="flex items-center gap-1 text-red-600 dark:text-red-400 font-semibold">
+                              <span>⚠️</span>
+                              <span>{currentEndpointInfo.dangerousEndpoints} dangerous</span>
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 text-green-600 dark:text-green-400 font-semibold">
+                              <span>✓</span>
+                              <span>All safe</span>
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-gray-600 dark:text-gray-400">
+                          No endpoints found
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}

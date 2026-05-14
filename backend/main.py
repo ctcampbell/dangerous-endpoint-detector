@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import anthropic
 import os
@@ -254,6 +255,54 @@ async def analyze_batch(request: AnalyzeBatchRequest):
         total_endpoints_analyzed=total_endpoints,
         total_dangerous_endpoints=total_dangerous
     )
+
+@app.post("/analyze-stream")
+async def analyze_stream(request: AnalyzeRequest):
+    """Analyze source code with streaming progress updates"""
+    async def event_generator():
+        try:
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                yield f"data: {json.dumps({'error': 'ANTHROPIC_API_KEY not set'})}\n\n"
+                return
+
+            client = anthropic.Anthropic(api_key=api_key)
+
+            # Extract endpoints from code
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting endpoints...'})}\n\n"
+            endpoints = extract_endpoints_from_code(request.code, request.file_path)
+
+            if not endpoints:
+                yield f"data: {json.dumps({'type': 'complete', 'total_endpoints': 0, 'dangerous_endpoints': []})}\n\n"
+                return
+
+            yield f"data: {json.dumps({'type': 'endpoints_found', 'count': len(endpoints)})}\n\n"
+
+            # Analyze endpoints and send progress updates
+            dangerous_endpoints = []
+            for idx, endpoint_data in enumerate(endpoints, 1):
+                # Send progress update
+                yield f"data: {json.dumps({'type': 'analyzing', 'endpoint': endpoint_data['endpoint'], 'index': idx, 'total': len(endpoints)})}\n\n"
+
+                # Analyze the endpoint
+                result = await analyze_endpoint_with_llm(endpoint_data, client)
+
+                if result is not None:
+                    dangerous_endpoints.append(result.model_dump())
+                    # Send dangerous endpoint found update
+                    yield f"data: {json.dumps({'type': 'dangerous_found', 'endpoint': endpoint_data['endpoint'], 'action': result.dangerous_action})}\n\n"
+                else:
+                    # Send safe endpoint update
+                    yield f"data: {json.dumps({'type': 'safe', 'endpoint': endpoint_data['endpoint']})}\n\n"
+
+            # Send completion message
+            yield f"data: {json.dumps({'type': 'complete', 'total_endpoints': len(endpoints), 'dangerous_endpoints': dangerous_endpoints})}\n\n"
+
+        except Exception as e:
+            logger.error(f"Error in streaming analysis: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.get("/health")
 async def health_check():

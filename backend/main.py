@@ -7,9 +7,19 @@ import re
 from typing import List, Dict
 import json
 from dotenv import load_dotenv
+import logging
+import asyncio
 
 # Load environment variables from .env file
 load_dotenv(dotenv_path="../.env")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -54,8 +64,9 @@ class AnalyzeBatchResponse(BaseModel):
     total_endpoints_analyzed: int
     total_dangerous_endpoints: int
 
-def extract_endpoints_from_code(code: str) -> List[Dict[str, any]]:
+def extract_endpoints_from_code(code: str, file_path: str = "unknown") -> List[Dict[str, any]]:
     """Extract potential API endpoints from code with line numbers"""
+    logger.info(f"Extracting endpoints from {file_path}")
     endpoints = []
     lines = code.split('\n')
 
@@ -85,10 +96,12 @@ def extract_endpoints_from_code(code: str) -> List[Dict[str, any]]:
                     'context': context
                 })
 
+    logger.info(f"Found {len(endpoints)} endpoints in {file_path}")
     return endpoints
 
 async def analyze_endpoint_with_llm(endpoint_data: Dict, client: anthropic.Anthropic) -> EndpointResult:
     """Use Claude to analyze if an endpoint performs dangerous actions"""
+    logger.info(f"Analyzing endpoint: {endpoint_data['endpoint']} (line {endpoint_data['line_number']})")
 
     prompt = f"""Analyze this API endpoint code to determine if it performs any of these dangerous actions:
 
@@ -141,6 +154,7 @@ Only respond with the JSON object, nothing else."""
                 'dangerous_upsert': 'Dangerous upsert/overwrite operation',
             }
 
+            logger.info(f"⚠️  DANGEROUS endpoint found: {endpoint_data['endpoint']} - {action_map.get(result['action'], result['action'])} (confidence: {result['confidence']})")
             return EndpointResult(
                 endpoint=endpoint_data['endpoint'],
                 line_number=endpoint_data['line_number'],
@@ -149,15 +163,17 @@ Only respond with the JSON object, nothing else."""
                 explanation=result['explanation']
             )
 
+        logger.info(f"✓ Endpoint {endpoint_data['endpoint']} is safe")
         return None
 
     except Exception as e:
-        print(f"Error analyzing endpoint: {e}")
+        logger.error(f"Error analyzing endpoint {endpoint_data['endpoint']}: {e}")
         return None
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_code(request: AnalyzeRequest):
     """Analyze source code for dangerous endpoints"""
+    logger.info(f"Starting analysis for file: {request.file_path}")
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
@@ -166,21 +182,24 @@ async def analyze_code(request: AnalyzeRequest):
     client = anthropic.Anthropic(api_key=api_key)
 
     # Extract endpoints from code
-    endpoints = extract_endpoints_from_code(request.code)
+    endpoints = extract_endpoints_from_code(request.code, request.file_path)
 
     if not endpoints:
+        logger.info(f"No endpoints found in {request.file_path}")
         return AnalyzeResponse(
             results=[],
             total_endpoints_analyzed=0
         )
 
-    # Analyze each endpoint with Claude
-    dangerous_endpoints = []
-    for endpoint_data in endpoints:
-        result = await analyze_endpoint_with_llm(endpoint_data, client)
-        if result:
-            dangerous_endpoints.append(result)
+    # Analyze all endpoints concurrently with Claude
+    logger.info(f"Starting concurrent analysis of {len(endpoints)} endpoints")
+    tasks = [analyze_endpoint_with_llm(endpoint_data, client) for endpoint_data in endpoints]
+    results = await asyncio.gather(*tasks)
 
+    # Filter out None results (safe endpoints)
+    dangerous_endpoints = [r for r in results if r is not None]
+
+    logger.info(f"Analysis complete: {len(dangerous_endpoints)} dangerous endpoints found out of {len(endpoints)} total")
     return AnalyzeResponse(
         results=dangerous_endpoints,
         total_endpoints_analyzed=len(endpoints)
@@ -189,6 +208,7 @@ async def analyze_code(request: AnalyzeRequest):
 @app.post("/analyze-batch", response_model=AnalyzeBatchResponse)
 async def analyze_batch(request: AnalyzeBatchRequest):
     """Analyze multiple source code files for dangerous endpoints"""
+    logger.info(f"Starting batch analysis for {len(request.files)} files")
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
@@ -200,18 +220,26 @@ async def analyze_batch(request: AnalyzeBatchRequest):
     total_endpoints = 0
     total_dangerous = 0
 
-    for file_input in request.files:
+    for idx, file_input in enumerate(request.files, 1):
+        logger.info(f"Processing file {idx}/{len(request.files)}: {file_input.name}")
+
         # Extract endpoints from this file
-        endpoints = extract_endpoints_from_code(file_input.content)
+        endpoints = extract_endpoints_from_code(file_input.content, file_input.name)
         total_endpoints += len(endpoints)
 
-        # Analyze each endpoint with Claude
-        dangerous_endpoints = []
-        for endpoint_data in endpoints:
-            result = await analyze_endpoint_with_llm(endpoint_data, client)
-            if result:
-                dangerous_endpoints.append(result)
-                total_dangerous += 1
+        # Analyze all endpoints concurrently with Claude
+        if endpoints:
+            logger.info(f"Starting concurrent analysis of {len(endpoints)} endpoints in {file_input.name}")
+            tasks = [analyze_endpoint_with_llm(endpoint_data, client) for endpoint_data in endpoints]
+            results = await asyncio.gather(*tasks)
+
+            # Filter out None results (safe endpoints)
+            dangerous_endpoints = [r for r in results if r is not None]
+            total_dangerous += len(dangerous_endpoints)
+
+            logger.info(f"File {file_input.name}: {len(dangerous_endpoints)} dangerous endpoints found")
+        else:
+            dangerous_endpoints = []
 
         file_results.append(FileResult(
             file_path=file_input.name,
@@ -219,6 +247,7 @@ async def analyze_batch(request: AnalyzeBatchRequest):
             total_endpoints_analyzed=len(endpoints)
         ))
 
+    logger.info(f"Batch analysis complete: {total_dangerous} dangerous endpoints found in {total_endpoints} total endpoints across {len(request.files)} files")
     return AnalyzeBatchResponse(
         files=file_results,
         total_files_analyzed=len(request.files),

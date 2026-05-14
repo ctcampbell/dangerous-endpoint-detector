@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dangerous-endpoint-detector"
+version = "0.2.0"
+description = "Scan a source tree for dangerous API endpoints using Claude."
+requires-python = ">=3.9"
+dependencies = [
+    "anthropic>=0.40.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+dangerous-endpoints = "dangerous_endpoints.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dangerous_endpoints*"]

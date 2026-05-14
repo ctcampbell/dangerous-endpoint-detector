@@ -2,8 +2,6 @@
 
 A command-line tool that scans a source tree for potentially dangerous API endpoints using Claude.
 
-**⚠️ DO NOT USE THIS AGAINST CUSTOMER CODE ON YOUR LOCAL MACHINE. IF USING LOCALLY ONLY SCAN OPEN SOURCE PROJECTS DOWNLOADED FROM THE OPEN SOURCE REPOSITORY. FOR EXAMPLE, IF A CUSTOMER CONFIRMS THEY ARE TESTING A NON-MODIFIED VERSION OF WEBGOAT, DOWNLOAD FROM THE RELEVANT GITHUB REPOSITORY.**
-
 It detects endpoints that:
 
 1. **Log a user in** — authentication, session creation, token generation
